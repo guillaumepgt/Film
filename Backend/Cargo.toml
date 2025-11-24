@@ -1,0 +1,17 @@
+[package]
+name = "Film_api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+actix-web = "4"
+reqwest = { version = "0.11", features = ["rustls-tls", "json"] }
+scraper = "0.13"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+urlencoding = "2"
+bollard = "0.15"
+dotenv = "0.15"
+config = "0.13"
