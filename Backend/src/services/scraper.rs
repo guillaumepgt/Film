@@ -12,61 +12,70 @@ pub async fn perform_scraping(query: &str, domain: &str) -> Vec<ResultItem> {
 
     let mut results = Vec::new();
     let mut seen_links = HashSet::new();
-    let mut page = 1;
-    let max_pages = 2;
 
-    loop {
-        if page > max_pages { break; }
+    // 1. RECHERCHE
+    let url_str = format!("{}/recherche/{}", domain, query);
 
-        let url_str = if page == 1 {
-            format!("{}/recherche/{}", domain, query)
-        } else {
-            format!("{}/recherche/{}/{}", domain, query, page)
-        };
+    let res = match client.get(&url_str).send().await {
+        Ok(r) => r,
+        Err(_) => return results,
+    };
 
-        let res = match client.get(&url_str).send().await {
-            Ok(r) => r,
-            Err(_) => break,
-        };
+    let body = match res.text().await {
+        Ok(b) => b,
+        Err(_) => return results,
+    };
 
-        let body = match res.text().await {
-            Ok(b) => b,
-            Err(_) => break,
-        };
+    let document = Html::parse_document(&body);
+    let films_icon = Selector::parse("td > i.Films, td > i.Séries, i.Films, i.Séries").unwrap();
+    let link_selector = Selector::parse("a").unwrap();
+    let base_url = Url::parse(domain).unwrap();
 
-        let document = Html::parse_document(&body);
-        let films_icon = Selector::parse("td > i.Films, td > i.Séries, i.Films, i.Séries").unwrap();
-        let link_selector = Selector::parse("a").unwrap();
-        let base_url = Url::parse(domain).unwrap();
+    for icon in document.select(&films_icon) {
+        if let Some(tr) = icon.parent().and_then(|p| p.parent()).and_then(ElementRef::wrap) {
+            if tr.value().name() == "tr" {
+                for link in tr.select(&link_selector) {
+                    if let Some(href) = link.value().attr("href") {
+                        let title = link.text().collect::<Vec<_>>().join(" ").trim().to_string();
 
-        let mut page_results = 0;
+                        // Construction de l'URL de la page de détail
+                        let full_url = if href.starts_with("http") {
+                            href.to_string()
+                        } else {
+                            base_url.join(href).unwrap().to_string()
+                        };
 
-        for icon in document.select(&films_icon) {
-            if let Some(tr) = icon.parent().and_then(|p| p.parent()).and_then(ElementRef::wrap) {
-                if tr.value().name() == "tr" {
-                    for link in tr.select(&link_selector) {
-                        if let Some(href) = link.value().attr("href") {
-                            let title = link.text().collect::<Vec<_>>().join(" ").trim().to_string();
+                        if seen_links.insert(full_url.clone()) {
+                            // 2. NAVIGATION VERS LA PAGE DE DÉTAIL
+                            println!("📄 Page détail trouvée, récupération du magnet : {}", full_url);
 
-                            let full_url = if href.starts_with("http") {
-                                href.to_string()
-                            } else {
-                                base_url.join(href).unwrap().to_string()
-                            };
+                            // On fait une requête immédiate sur la page de détail
+                            if let Ok(detail_res) = client.get(&full_url).send().await {
+                                if let Ok(detail_body) = detail_res.text().await {
+                                    let detail_doc = Html::parse_document(&detail_body);
 
-                            if seen_links.insert(full_url.clone()) {
-                                results.push(ResultItem { title, href: full_url });
-                                page_results += 1;
+                                    // Sélecteur pour trouver le lien commençant par "magnet:"
+                                    let magnet_selector = Selector::parse("a[href^='magnet:']").unwrap();
+
+                                    if let Some(magnet_link) = detail_doc.select(&magnet_selector).next() {
+                                        if let Some(magnet_href) = magnet_link.value().attr("href") {
+                                            // On remplace l'URL de la page par le lien MAGNET
+                                            results.push(ResultItem {
+                                                title: title.clone(),
+                                                href: magnet_href.to_string()
+                                            });
+
+                                            println!("🧲 Magnet trouvé !");
+                                            return results;
+                                        }
+                                    }
+                                }
                             }
-                            break;
                         }
                     }
                 }
             }
         }
-
-        if page_results == 0 { break; }
-        page += 1;
     }
 
     results
