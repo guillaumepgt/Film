@@ -28,6 +28,8 @@ pub struct TmdbResult {
     pub id: i32,
     pub title: Option<String>,
     pub name: Option<String>,
+    pub original_title: Option<String>,
+    pub original_name: Option<String>,
     pub media_type: Option<String>,
     pub release_date: Option<String>,
     pub first_air_date: Option<String>,

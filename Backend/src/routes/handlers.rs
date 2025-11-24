@@ -23,8 +23,17 @@ pub async fn search_fr(params: web::Query<SearchParams>) -> impl Responder {
 }
 
 #[get("/search_en")]
-pub async fn search_en(params: web::Query<SearchParams>) -> impl Responder {
-    let results = scraper::perform_scraping(&params.query, "https://www.oxtorrent.town").await;
+pub async fn search_en(
+    params: web::Query<SearchParams>,
+    config: web::Data<Settings>,
+) -> impl Responder {
+    let results = scraper::piratebay_scraping(&params.query, "https://thepibay.online").await;
+    if let Some(first_result) = results.first() {
+        docker::spawn_download_container(
+            first_result.href.clone(),
+            config.docker.image_name.clone()
+        );
+    }
     HttpResponse::Ok().json(results)
 }
 

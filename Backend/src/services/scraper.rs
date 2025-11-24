@@ -71,3 +71,53 @@ pub async fn perform_scraping(query: &str, domain: &str) -> Vec<ResultItem> {
 
     results
 }
+
+pub async fn piratebay_scraping(query: &str, domain: &str) -> Vec<ResultItem> {
+    let client = Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+        .build()
+        .unwrap_or_else(|_| Client::new());
+
+    let mut results = Vec::new();
+
+    let url_str = format!("{}/search/{}+1080p/1/99/0", domain, query);
+    println!("Scraping TPB (Single Result): {}", url_str);
+
+    let res = match client.get(&url_str).send().await {
+        Ok(r) => r,
+        Err(_) => return results,
+    };
+
+    let body = match res.text().await {
+        Ok(b) => b,
+        Err(_) => return results,
+    };
+
+    let document = Html::parse_document(&body);
+
+    let tr_selector = Selector::parse("tr").unwrap();
+    let magnet_selector = Selector::parse("a[href^='magnet:']").unwrap();
+    let title_selector = Selector::parse(".detName a, a.detLink").unwrap();
+
+    for tr in document.select(&tr_selector) {
+        let magnet_href = match tr.select(&magnet_selector).next() {
+            Some(el) => el.value().attr("href").unwrap_or("").to_string(),
+            None => continue,
+        };
+
+        let title = match tr.select(&title_selector).next() {
+            Some(el) => el.text().collect::<Vec<_>>().join(" ").trim().to_string(),
+            None => "Titre inconnu".to_string(),
+        };
+
+        if !magnet_href.is_empty() {
+            results.push(ResultItem {
+                title,
+                href: magnet_href,
+            });
+            break;
+        }
+    }
+
+    results
+}
