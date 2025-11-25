@@ -19,17 +19,23 @@ pub async fn search_movie(api_key: &str, query: &str) -> Result<Vec<TmdbResult>,
     let tmdb_data = resp.json::<TmdbResponse>().await
         .map_err(|e| format!("Erreur parsing JSON TMDB: {}", e))?;
 
-    let processed_results = tmdb_data.results.into_iter().map(|mut item| {
-        let base_image_url = "https://image.tmdb.org/t/p/w500";
+    let processed_results: Vec<TmdbResult> = tmdb_data.results.into_iter()
+        .filter_map(|mut item| {
+            let base_image_url = "https://image.tmdb.org/t/p/w500";
 
-        if let Some(path) = item.poster_path {
-            item.poster_path = Some(format!("{}{}", base_image_url, path));
-        }
-        if let Some(path) = item.backdrop_path {
-            item.backdrop_path = Some(format!("{}{}", base_image_url, path));
-        }
-        item
-    }).collect();
+            // On complète les URLs si elles existent
+            if let Some(path) = item.poster_path {
+                item.poster_path = Some(format!("{}{}", base_image_url, path));
+            }
+            if let Some(path) = item.backdrop_path {
+                item.backdrop_path = Some(format!("{}{}", base_image_url, path));
+            }
+            if item.poster_path.is_none() && item.backdrop_path.is_none() {
+                return None;
+            }
+            Some(item)
+        })
+        .collect();
 
     Ok(processed_results)
 }

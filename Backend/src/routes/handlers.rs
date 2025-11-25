@@ -3,6 +3,7 @@ use crate::config::Settings;
 use crate::models::{SearchParams, MagnetParams};
 use crate::services::{tmdb, scraper, docker};
 
+// --- Route TMDB ---
 #[get("/search_tmdb")]
 pub async fn search_tmdb_handler(
     params: web::Query<SearchParams>,
@@ -16,21 +17,24 @@ pub async fn search_tmdb_handler(
     }
 }
 
+// --- Routes Scraping ---
+
 #[get("/search_fr")]
 pub async fn search_fr(
     params: web::Query<SearchParams>,
     config: web::Data<Settings>,
 ) -> impl Responder {
-    let results = scraper::perform_scraping(&params.query, "https://ww1-oxtorrent.me").await;
+    let results = scraper::perform_scraping(&params.query, "https://ww1-yggtorrent.me").await;
+
     if let Some(first_result) = results.first() {
         docker::spawn_download_container(
             first_result.href.clone(),
             config.docker.image_name.clone()
         );
     }
+
     HttpResponse::Ok().json(results)
 }
-
 
 #[get("/search_en")]
 pub async fn search_en(
@@ -38,12 +42,14 @@ pub async fn search_en(
     config: web::Data<Settings>,
 ) -> impl Responder {
     let results = scraper::piratebay_scraping(&params.query, "https://thepibay.online").await;
+
     if let Some(first_result) = results.first() {
         docker::spawn_download_container(
             first_result.href.clone(),
             config.docker.image_name.clone()
         );
     }
+
     HttpResponse::Ok().json(results)
 }
 
