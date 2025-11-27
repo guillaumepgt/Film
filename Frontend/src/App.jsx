@@ -1,11 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, Play, Loader, Film, Tv, CheckCircle, AlertCircle, Globe, List, Download, Copy, ExternalLink, X, Maximize, WifiOff, RefreshCw } from 'lucide-react';
+import { Search, Play, Loader, Film, Tv, CheckCircle, AlertCircle, Globe, List, Download, Copy, ExternalLink, X, Maximize, WifiOff, RefreshCw, SkipForward, ArrowRightLeft } from 'lucide-react';
 
 export default function App() {
 	const [query, setQuery] = useState('');
 	const [movies, setMovies] = useState([]);
 	const [loading, setLoading] = useState(false);
-	const [downloading, setDownloading] = useState(null);
+	const [downloading, setDownloading] = useState(null); // { id: 123, lang: 'fr' }
 
 	const [streamUrl, setStreamUrl] = useState(null);
 	const [isStreamReady, setIsStreamReady] = useState(false);
@@ -14,68 +14,98 @@ export default function App() {
 	const [error, setError] = useState(null);
 	const [streamError, setStreamError] = useState(null);
 
+	// Nouveaux états pour la gestion de la qualité (Défaut : Bluray)
+	const [searchQuality, setSearchQuality] = useState('Bluray');
+	const [currentMovie, setCurrentMovie] = useState(null);
+	const [currentLang, setCurrentLang] = useState(null);
+
 	const videoRef = useRef(null);
 	const pollingRef = useRef(null);
-	// Ref pour accéder à l'état actuel dans le setInterval sans problème de closure
+
+	// Refs pour accéder aux états frais dans les callbacks asynchrones
 	const torrentsRef = useRef([]);
 	const activeTorrentRef = useRef(null);
+	const qualityRef = useRef('Bluray');
+	const movieRef = useRef(null);
+	const langRef = useRef(null);
 
-	// Mise à jour des Refs quand les états changent
+	// Synchronisation des Refs
 	useEffect(() => { torrentsRef.current = torrentResults; }, [torrentResults]);
 	useEffect(() => { activeTorrentRef.current = activeTorrent; }, [activeTorrent]);
+	useEffect(() => { qualityRef.current = searchQuality; }, [searchQuality]);
+	useEffect(() => { movieRef.current = currentMovie; }, [currentMovie]);
+	useEffect(() => { langRef.current = currentLang; }, [currentLang]);
 
 	const cleanTitle = (text) => {
 		if (!text) return '';
 		return text.replace(/[^a-zA-Z0-9\s\u00C0-\u017F]/g, ' ').replace(/\s+/g, ' ').trim();
 	};
 
-	const waitForStream = (hostname) => {
+	const waitForStream = () => {
 		setIsStreamReady(false);
-		setStreamError(null);
 
 		if (pollingRef.current) clearInterval(pollingRef.current);
 
 		pollingRef.current = setInterval(async () => {
 			try {
-				const res = await fetch(`http://${hostname}:9000/meta`);
+				const res = await fetch(`/api/stream/meta`);
 				const data = await res.json();
+
 				console.log("Statut Streamer:", data);
 
-				// --- LOGIQUE DE RETRY AUTOMATIQUE ---
-				if (data.status === 'timeout' || data.status === 'no_video') {
-					console.log("❌ Échec source actuelle. Tentative suivante...");
+				// --- LOGIQUE DE RETRY & FALLBACK QUALITÉ ---
+				if (data.status === 'timeout' || data.status === 'no_video' || data.status === 'stalled') {
+					const cause = data.status === 'stalled' ? "bloquée (0 KB/s)" : "morte";
+					console.log(`❌ Source ${cause}.`);
 
 					const currentList = torrentsRef.current;
 					const currentTorrent = activeTorrentRef.current;
-
-					// Trouver l'index du torrent actuel
 					const currentIndex = currentList.findIndex(t => t.href === currentTorrent?.href);
 
-					// S'il reste des torrents après celui-ci
+					// 1. Essayer le lien suivant dans la liste actuelle
 					if (currentIndex !== -1 && currentIndex < currentList.length - 1) {
 						const nextTorrent = currentList[currentIndex + 1];
+						const nextIndex = currentIndex + 2;
+						setStreamError(`Source ${currentIndex + 1} ${cause}. Essai source ${nextIndex}/${currentList.length} (${qualityRef.current})...`);
 
-						// Affichage visuel de la tentative
-						setStreamError(`Source morte. Essai automatique ${currentIndex + 2}/${currentList.length}...`);
-
-						// On arrête ce polling ci
 						clearInterval(pollingRef.current);
-
-						// On lance le suivant
-						forceDownload(nextTorrent);
+						setTimeout(() => forceDownload(nextTorrent, true), 1000);
 						return;
-					} else {
-						// Plus de liens disponibles
-						setStreamError("Tous les liens ont été testés sans succès.");
+					}
+					// 2. CASCADE DE QUALITÉ (Bluray -> 1080p -> 720p)
+					else if (qualityRef.current === 'Bluray') {
+						setStreamError("Sources Bluray épuisées. Tentative en 1080p...");
+						console.log("⚠️ Fallback 1080p activé");
+						clearInterval(pollingRef.current);
+						setTimeout(() => {
+							launchSearch(movieRef.current, langRef.current, '1080p');
+						}, 1500);
+						return;
+					}
+					else if (qualityRef.current === '1080p') {
+						setStreamError("Sources 1080p épuisées. Tentative en 720p...");
+						console.log("⚠️ Fallback 720p activé");
+						clearInterval(pollingRef.current);
+						setTimeout(() => {
+							launchSearch(movieRef.current, langRef.current, '720p');
+						}, 1500);
+						return;
+					}
+					// 3. Echec total
+					else {
+						setStreamError("Échec : Aucune source valide trouvée (Bluray, 1080p & 720p).");
 						clearInterval(pollingRef.current);
 						return;
 					}
 				}
 
 				if (data.ready) {
-					clearInterval(pollingRef.current);
-					setStreamUrl(`http://${hostname}:9000/`);
-					setIsStreamReady(true);
+					// IMPORTANT : On ne clear PAS l'intervalle ici pour continuer à détecter les stalls
+					if (!isStreamReady) {
+						setStreamUrl(`/api/stream/video`);
+						setIsStreamReady(true);
+						setStreamError(null);
+					}
 				}
 			} catch (err) {
 				console.log("Attente du démarrage du conteneur...");
@@ -103,45 +133,89 @@ export default function App() {
 		finally { setLoading(false); }
 	};
 
-	const handleStream = async (movie, lang) => {
+	// --- NOUVELLE FONCTION DE RECHERCHE UNIFIÉE ---
+	const launchSearch = async (movie, lang, quality) => {
+		// Mise à jour des états globaux pour le fallback
+		setCurrentMovie(movie);
+		setCurrentLang(lang);
+		setSearchQuality(quality);
+
+		// Construction du titre : Titre + Année + Qualité
 		let titleToSearch = lang === 'fr' ? (movie.title || movie.original_title) : movie.original_title;
 		if (titleToSearch) titleToSearch = cleanTitle(titleToSearch);
+
+		// --- CORRECTION ICI : NETTOYAGE PRÉVENTIF ---
+		// On enlève toute mention de qualité qui pourrait traîner dans le titre de base
+		titleToSearch = titleToSearch.replace(/(1080p|720p|4k|hdlight|bluray)/gi, '').trim();
+
 		const dateStr = movie.release_date || movie.first_air_date;
 		if (dateStr) titleToSearch += ` ${dateStr.split('-')[0]}`;
 
-		setDownloading({ id: movie.id, lang: lang });
+		// Ajout explicite de la qualité pour guider le scraper
+		titleToSearch += ` ${quality}`;
+
+		console.log(`🔎 Recherche [${lang.toUpperCase()}] [${quality}] : "${titleToSearch}"`);
+
+		// Reset UI pour une nouvelle recherche
 		setStreamUrl(null);
 		setStreamError(null);
 		setIsStreamReady(false);
+
+		// Si c'est un fallback (déjà en cours de download), on met à jour le message
+		if (downloading) {
+			setStreamError(`Recherche de nouvelles sources en ${quality}...`);
+		} else {
+			setDownloading({ id: movie.id, lang: lang });
+		}
 
 		try {
 			const endpoint = lang === 'fr' ? '/api/search_fr' : '/api/search_en';
 			const res = await fetch(`${endpoint}?query=${encodeURIComponent(titleToSearch)}`);
 			const data = await res.json();
+
 			if (data && data.length > 0) {
 				setTorrentResults(data);
 				setActiveTorrent(data[0]);
+				setStreamUrl("loading");
+				// On lance la surveillance
 				const hostname = window.location.hostname;
 				waitForStream(hostname);
-				setStreamUrl("loading");
 			} else {
-				setError(`Aucun résultat pour "${titleToSearch}"`);
+				// Aucun résultat trouvé pour cette qualité
+				if (quality === 'Bluray') {
+					console.log("⚠️ Aucun Bluray trouvé. Essai immédiat en 1080p...");
+					launchSearch(movie, lang, '1080p'); // Récursion immédiate
+				} else if (quality === '1080p') {
+					console.log("⚠️ Aucun 1080p trouvé. Essai immédiat en 720p...");
+					launchSearch(movie, lang, '720p'); // Récursion immédiate
+				} else {
+					setError(`Aucun torrent trouvé (ni Bluray, ni 1080p, ni 720p) pour "${titleToSearch}"`);
+					setDownloading(null);
+				}
 			}
-		} catch (err) { setError("Erreur technique"); }
-		finally { setDownloading(null); }
+		} catch (err) {
+			setError("Erreur technique lors de la recherche");
+			setDownloading(null);
+		}
 	};
 
-	const forceDownload = async (torrent) => {
+	const handleStream = (movie, lang) => {
+		// Démarrage par défaut en Bluray
+		launchSearch(movie, lang, 'Bluray');
+	};
+
+	const forceDownload = async (torrent, isAutoRetry = false) => {
 		setActiveTorrent(torrent);
 		setStreamUrl("loading");
 		setIsStreamReady(false);
-		// On ne reset PAS streamError ici si on est en auto-retry, pour garder le message "Essai 2/5..."
-		// Mais on peut afficher un petit loader
+
+		if (!isAutoRetry) {
+			setStreamError(null);
+		}
 
 		try {
 			await fetch('/api/download', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({magnet: torrent.href}) });
-			const hostname = window.location.hostname;
-			waitForStream(hostname);
+			waitForStream();
 		} catch (err) { setError("Erreur changement torrent"); }
 	};
 
@@ -152,13 +226,20 @@ export default function App() {
 				<div className="fixed inset-0 z-[100] bg-black/95 flex flex-col items-center justify-center animate-in fade-in duration-300">
 					<div className="absolute top-0 w-full p-4 flex justify-between items-center bg-gradient-to-b from-black to-transparent z-50">
 						<div className="flex items-center gap-4">
-							<button onClick={() => { setStreamUrl(null); if(pollingRef.current) clearInterval(pollingRef.current); }} className="p-2 hover:bg-white/20 rounded-full transition">
+							<button onClick={() => { setStreamUrl(null); if(pollingRef.current) clearInterval(pollingRef.current); setDownloading(null); }} className="p-2 hover:bg-white/20 rounded-full transition">
 								<X size={32} />
 							</button>
 							<div>
-								<h2 className="font-bold text-xl">{cleanTitle(activeTorrent.title)}</h2>
+								<div className="flex items-center gap-2">
+									<h2 className="font-bold text-xl">{cleanTitle(activeTorrent.title)}</h2>
+									<span className="text-xs bg-gray-700 px-2 py-0.5 rounded text-gray-300 border border-gray-600">{searchQuality}</span>
+								</div>
+
 								{streamError ? (
-									<span className="text-sm text-orange-400 flex items-center gap-1 animate-pulse"><RefreshCw size={14} className="animate-spin"/> {streamError}</span>
+									<span className="text-sm text-orange-400 flex items-center gap-1 animate-pulse">
+                                {streamError.includes("720p") ? <ArrowRightLeft size={14}/> : <SkipForward size={14} />}
+										{streamError}
+                            </span>
 								) : isStreamReady ? (
 									<span className="text-sm text-green-400 flex items-center gap-1"><CheckCircle size={14}/> Lecture prête</span>
 								) : (
@@ -169,24 +250,24 @@ export default function App() {
 					</div>
 
 					<div className="w-full max-w-6xl aspect-video bg-black shadow-2xl relative group flex items-center justify-center">
-						{streamError && !streamError.startsWith("Source morte") && !streamError.startsWith("Aucun") ? (
-							/* Erreur Finale */
+						{streamError && streamError.startsWith("Échec") ? (
 							<div className="text-center space-y-4 p-8 bg-red-900/20 rounded-xl border border-red-500/50">
 								<WifiOff className="w-16 h-16 text-red-500 mx-auto" />
-								<h3 className="text-xl font-bold text-red-400">Échec Streaming</h3>
-								<p className="text-gray-300">{streamError}</p>
+								<h3 className="text-xl font-bold text-red-400">Aucun lien valide</h3>
+								<p className="text-gray-300">Impossible de lire ce film en Bluray, 1080p ou 720p.</p>
+								<button onClick={() => setStreamUrl(null)} className="mt-4 px-6 py-2 bg-red-600 rounded-lg hover:bg-red-700">Fermer</button>
 							</div>
 						) : !isStreamReady ? (
-							/* Chargement / Retry en cours */
 							<div className="text-center space-y-4">
-								<Loader className="w-16 h-16 text-red-600 animate-spin mx-auto" />
-								<p className="text-xl font-bold">Chargement du flux...</p>
+								{streamError ? <RefreshCw className="w-16 h-16 text-orange-500 animate-spin mx-auto" /> : <Loader className="w-16 h-16 text-red-600 animate-spin mx-auto" />}
+								<p className="text-xl font-bold">
+									{streamError ? "Changement de source..." : "Préparation du film..."}
+								</p>
 								<p className="text-gray-400">
-									{streamError || "Connexion aux pairs (Peers)..."}
+									{streamError || "Connexion aux pairs en cours..."}
 								</p>
 							</div>
 						) : (
-							/* VIDEO */
 							<video
 								ref={videoRef}
 								className="w-full h-full"
@@ -203,13 +284,22 @@ export default function App() {
 					<div className="absolute bottom-10 w-full max-w-4xl px-4 z-50">
 						{torrentResults.length > 1 && (
 							<div className="bg-gray-900/80 backdrop-blur rounded-xl p-4 border border-gray-700 max-h-40 overflow-y-auto">
-								<p className="text-xs text-gray-400 mb-2 uppercase font-bold tracking-wider">Liste des sources</p>
+								<p className="text-xs text-gray-400 mb-2 uppercase font-bold tracking-wider">
+									Sources trouvées ({searchQuality})
+								</p>
 								{torrentResults.map((t, idx) => (
 									<div key={idx}
 											 onClick={() => forceDownload(t)}
-											 className={`flex justify-between items-center p-2 rounded cursor-pointer hover:bg-white/10 ${t.href === activeTorrent.href ? 'text-red-500 font-bold' : 'text-gray-300'}`}>
-										<span className="truncate text-sm w-3/4">{cleanTitle(t.title)}</span>
-										{t.href === activeTorrent.href && <span className="text-xs border border-red-500 px-2 rounded">En cours</span>}
+											 className={`flex justify-between items-center p-2 rounded cursor-pointer hover:bg-white/10 ${t.href === activeTorrent.href ? 'bg-white/5 border-l-4 border-red-500' : 'text-gray-300'}`}>
+                            <span className={`truncate text-sm w-3/4 ${t.href === activeTorrent.href ? 'text-white font-bold' : ''}`}>
+                                {cleanTitle(t.title)}
+                            </span>
+										{t.href === activeTorrent.href && (
+											<span className="text-xs bg-red-600 text-white px-2 py-1 rounded flex items-center gap-1">
+                                    {streamError ? <Loader size={10} className="animate-spin"/> : <Play size={10}/>}
+												{streamError ? 'Test...' : 'Actif'}
+                                </span>
+										)}
 									</div>
 								))}
 							</div>
@@ -218,6 +308,7 @@ export default function App() {
 				</div>
 			)}
 
+			{/* RESTE DE L'INTERFACE (Navbar, Recherche, Grille) */}
 			<nav className="fixed top-0 w-full z-40 bg-gradient-to-b from-black/90 to-transparent p-6">
 				<div className="max-w-7xl mx-auto flex items-center justify-between">
 					<div className="flex items-center gap-2 text-red-600 font-bold text-3xl tracking-tighter cursor-pointer" onClick={() => window.location.reload()}>

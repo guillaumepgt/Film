@@ -25,17 +25,20 @@ const engine = torrentStream(magnetLink, {
 
 let videoFile = null;
 let engineStatus = 'searching';
-let videoCodecInfo = 'unknown'; // Nouveau : Stocke le codec détecté (h264, hevc...)
 let progressInterval = null;
+let selectionTime = 0;
+// Liste des clients connectés (navigateurs en train de lire)
+let activeResponses = [];
 
-// --- TIMEOUT RAPIDE ---
-const SEARCH_TIMEOUT = 25000;
+// --- TIMEOUTS ---
+const SEARCH_TIMEOUT = 20000;
+const STALL_TIMEOUT = 12000;
 
 const timeoutTimer = setTimeout(() => {
 	if (engineStatus === 'searching') {
-		console.error(`❌ Timeout : Aucune source trouvée après ${SEARCH_TIMEOUT/1000}s.`);
+		console.error(`❌ Timeout Recherche : Rien trouvé après ${SEARCH_TIMEOUT/1000}s.`);
 		engineStatus = 'timeout';
-		engine.destroy(() => console.log('Moteur arrêté (Timeout).'));
+		engine.destroy();
 	}
 }, SEARCH_TIMEOUT);
 
@@ -54,35 +57,37 @@ engine.on('ready', () => {
 
 	if (videoFile) {
 		console.log(`🎬 Fichier vidéo sélectionné : ${videoFile.name}`);
+		engineStatus = 'ready';
+		selectionTime = Date.now();
+		videoFile.select();
 
-		// --- ANALYSE DU CODEC (FFPROBE) ---
-		// On lance une analyse rapide pour savoir si c'est du H265 ou H264 10bit
-		// Cela permet au Frontend d'avertir l'utilisateur
-		ffmpeg.ffprobe(videoFile.createReadStream(), (err, metadata) => {
-			if (!err && metadata && metadata.streams) {
-				const videoStream = metadata.streams.find(s => s.codec_type === 'video');
-				if (videoStream) {
-					videoCodecInfo = videoStream.codec_name; // ex: 'h264', 'hevc' (h265)
-					// Détection 10-bit (pix_fmt: yuv420p10le)
-					if (videoStream.pix_fmt && videoStream.pix_fmt.includes('10le')) {
-						videoCodecInfo += ' (10-bit)';
-					}
-					console.log(`🔍 Codec détecté : ${videoCodecInfo}`);
-				}
-			}
-			// On marque le moteur comme prêt après l'analyse (même si elle échoue)
-			engineStatus = 'ready';
-			videoFile.select();
-		});
-
-		// Logs de progression
+		// --- MONITORING ---
 		clearInterval(progressInterval);
 		progressInterval = setInterval(() => {
 			const speed = (engine.swarm.downloadSpeed() / 1024).toFixed(0);
 			const downloaded = (engine.swarm.downloaded / 1024 / 1024).toFixed(1);
 			const peers = engine.swarm.wires.length;
+
 			console.log(`⬇️  Vitesse: ${speed} KB/s | Session: ${downloaded} MB | Peers: ${peers}`);
-		}, 2000);
+
+			// RÈGLE D'ABANDON (STALL)
+			const duration = Date.now() - selectionTime;
+
+			if (engine.swarm.downloaded < 100 * 1024 && duration > STALL_TIMEOUT) {
+				console.error(`❌ STALL DÉTECTÉ : 0 data après ${STALL_TIMEOUT/1000}s. On passe au suivant.`);
+				engineStatus = 'stalled';
+				clearInterval(progressInterval);
+
+				// NOUVEAU : On coupe toutes les connexions vidéo actives pour forcer l'erreur côté client
+				activeResponses.forEach(res => {
+					try { res.end(); } catch(e) {}
+				});
+				activeResponses = [];
+
+				engine.destroy();
+			}
+
+		}, 1000);
 
 	} else {
 		console.error('❌ Erreur : Pas de fichier vidéo dans ce torrent.');
@@ -92,14 +97,24 @@ engine.on('ready', () => {
 });
 
 app.get('/', (req, res) => {
-	if (engineStatus === 'timeout') return res.status(408).send('Erreur : Torrent mort (0 Seeds).');
-	if (engineStatus === 'no_video') return res.status(404).send('Erreur : Pas de vidéo trouvée.');
+	// Enregistrement du client
+	activeResponses.push(res);
+	res.on('close', () => {
+		activeResponses = activeResponses.filter(r => r !== res);
+	});
 
-	if (!videoFile) {
-		return res.status(503).send('Vidéo en cours de recherche...');
+	if (engineStatus === 'timeout') return res.status(408).send('Erreur : Torrent mort (Metadata).');
+	if (engineStatus === 'stalled') return res.status(408).send('Erreur : Torrent bloqué (0 Seeds).');
+	if (engineStatus === 'no_video') return res.status(404).send('Erreur : Pas de vidéo.');
+
+	if (!videoFile) return res.status(503).send('Initialisation...');
+
+	console.log("🔥 Connexion client. Mode REMUX (Low CPU)...");
+
+	if (engineStatus === 'stalled') {
+		return res.status(408).send('Flux coupé (Stalled).');
 	}
 
-	console.log("🔥 Nouvelle connexion client. Mode REMUX (Low CPU)...");
 	const stream = videoFile.createReadStream();
 
 	res.writeHead(200, {
@@ -108,7 +123,7 @@ app.get('/', (req, res) => {
 		'Connection': 'keep-alive'
 	});
 
-	let command = ffmpeg(stream)
+	ffmpeg(stream)
 		.videoCodec('copy')
 		.audioCodec('aac')
 		.audioBitrate(128)
@@ -119,31 +134,23 @@ app.get('/', (req, res) => {
 			'-tune zerolatency'
 		])
 		.format('mp4')
-		.on('start', (cmd) => console.log('Start FFmpeg:', cmd))
 		.on('error', (err) => {
-			if (!err.message.includes('Output stream closed')) {
-				console.error('Erreur FFmpeg:', err.message);
-			}
+			if(!err.message.includes('Output stream')) console.error('FFmpeg Err:', err.message);
 		})
-		.on('end', () => console.log('Fin du stream.'));
-
-	command.pipe(res, { end: true });
+		.pipe(res, { end: true });
 });
 
 app.get('/meta', (req, res) => {
-	let message = "Recherche en cours...";
-	if (engineStatus === 'timeout') message = "Torrent Mort (0 Seeds)";
-	if (engineStatus === 'no_video') message = "Aucun fichier vidéo";
+	let message = "Recherche...";
+	if (engineStatus === 'timeout') message = "Mort (Timeout)";
+	if (engineStatus === 'stalled') message = "Bloqué (0 KB/s)";
 	if (videoFile) message = videoFile.name;
 
 	res.json({
-		ready: engineStatus === 'ready', // On attend que le probe soit fini
+		ready: !!videoFile && engineStatus !== 'stalled' && engineStatus !== 'timeout',
 		status: engineStatus,
-		filename: message,
-		codec: videoCodecInfo // On envoie l'info au frontend
+		filename: message
 	});
 });
 
-app.listen(PORT, () => {
-	console.log(`Server listening on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
