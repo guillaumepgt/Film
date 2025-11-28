@@ -1,0 +1,18 @@
+FROM rust:1.85
+
+WORKDIR /usr/src/app
+
+RUN apt-get update && \
+    apt-get install -y pkg-config libssl-dev transmission-cli curl rclone && \
+    cargo install cargo-watch --locked
+
+# Copier le code source Rust
+COPY . .
+
+# Créer le dossier de téléchargement
+RUN mkdir -p /usr/src/app/Downloads
+
+# Lancer l'API + le script de synchronisation
+CMD ["sh", "-c", "cargo watch -x run"]
+
+#docker run -d -v .:/usr/src/app -p 8080:8080 -v /var/run/docker.sock:/var/run/docker.sock film-backend

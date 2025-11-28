@@ -44,7 +44,7 @@ pub async fn perform_scraping(query: &str, domain: &str) -> Vec<ResultItem> {
     println!("🔍 Analyse stricte: Titre='{}', Année='{:?}' (Query originale: '{}')", search_title, search_year, query);
 
     // 1. RECHERCHE
-    let url_str = format!("{}/recherche/{} 1080p", domain, query);
+    let url_str = format!("{}/recherche/{}", domain, query);
     println!("🔍 Scraping URL: {}", url_str);
 
     let res = match client.get(&url_str).send().await {

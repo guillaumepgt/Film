@@ -7,5 +7,7 @@ pub fn init_routes(cfg: &mut web::ServiceConfig) {
         .service(handlers::search_tmdb_handler)
         .service(handlers::search_fr)
         .service(handlers::search_en)
-        .service(handlers::download);
+        .service(handlers::download)
+        .service(handlers::stream_meta)
+        .service(handlers::stream_video_handler);
 }
