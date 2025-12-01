@@ -223,67 +223,110 @@ export default function App() {
 		<div className="min-h-screen bg-gray-900 text-white font-sans">
 			{/* --- OVERLAY PLAYER --- */}
 			{streamUrl && activeTorrent && (
-				<div className="fixed inset-0 z-[100] bg-black/95 flex flex-col items-center justify-center animate-in fade-in duration-300">
-					<div className="absolute top-0 w-full p-4 flex justify-between items-center bg-gradient-to-b from-black to-transparent z-50">
+				<div
+					className="fixed inset-0 z-[100] bg-black/95 flex flex-col items-center justify-center animate-in fade-in duration-300">
+					<div
+						className="absolute top-0 w-full p-4 flex justify-between items-center bg-gradient-to-b from-black to-transparent z-50">
 						<div className="flex items-center gap-4">
-							<button onClick={() => { setStreamUrl(null); if(pollingRef.current) clearInterval(pollingRef.current); setDownloading(null); }} className="p-2 hover:bg-white/20 rounded-full transition">
-								<X size={32} />
+							<button onClick={() => {
+								setStreamUrl(null);
+								if (pollingRef.current) clearInterval(pollingRef.current);
+								setDownloading(null);
+							}} className="p-2 hover:bg-white/20 rounded-full transition">
+								<X size={32}/>
 							</button>
 							<div>
 								<div className="flex items-center gap-2">
 									<h2 className="font-bold text-xl">{cleanTitle(activeTorrent.title)}</h2>
-									<span className="text-xs bg-gray-700 px-2 py-0.5 rounded text-gray-300 border border-gray-600">{searchQuality}</span>
+									<span
+										className="text-xs bg-gray-700 px-2 py-0.5 rounded text-gray-300 border border-gray-600">{searchQuality}</span>
 								</div>
 
 								{streamError ? (
 									<span className="text-sm text-orange-400 flex items-center gap-1 animate-pulse">
-                                {streamError.includes("720p") ? <ArrowRightLeft size={14}/> : <SkipForward size={14} />}
+                                {streamError.includes("720p") ? <ArrowRightLeft size={14}/> : <SkipForward size={14}/>}
 										{streamError}
                             </span>
 								) : isStreamReady ? (
 									<span className="text-sm text-green-400 flex items-center gap-1"><CheckCircle size={14}/> Lecture prête</span>
 								) : (
-									<span className="text-sm text-yellow-400 flex items-center gap-1"><Loader className="animate-spin" size={14}/> Recherche de sources...</span>
+									<span className="text-sm text-yellow-400 flex items-center gap-1"><Loader className="animate-spin"
+																																														size={14}/> Recherche de sources...</span>
 								)}
 							</div>
 						</div>
 					</div>
 
-					<div className="w-full max-w-6xl aspect-video bg-black shadow-2xl relative group flex items-center justify-center">
+					<div
+						className="w-full max-w-6xl aspect-video bg-black shadow-2xl relative group flex items-center justify-center">
+						{/* Cas 1 : Erreur détectée par le Frontend (Streamer HS, Timeout...) */}
 						{streamError && streamError.startsWith("Échec") ? (
-							<div className="text-center space-y-4 p-8 bg-red-900/20 rounded-xl border border-red-500/50">
-								<WifiOff className="w-16 h-16 text-red-500 mx-auto" />
-								<h3 className="text-xl font-bold text-red-400">Aucun lien valide</h3>
-								<p className="text-gray-300">Impossible de lire ce film en Bluray, 1080p ou 720p.</p>
-								<button onClick={() => setStreamUrl(null)} className="mt-4 px-6 py-2 bg-red-600 rounded-lg hover:bg-red-700">Fermer</button>
-							</div>
-						) : !isStreamReady ? (
-							<div className="text-center space-y-4">
-								{streamError ? <RefreshCw className="w-16 h-16 text-orange-500 animate-spin mx-auto" /> : <Loader className="w-16 h-16 text-red-600 animate-spin mx-auto" />}
-								<p className="text-xl font-bold">
-									{streamError ? "Changement de source..." : "Préparation du film..."}
-								</p>
-								<p className="text-gray-400">
-									{streamError || "Connexion aux pairs en cours..."}
-								</p>
-							</div>
-						) : (
-							<video
-								ref={videoRef}
-								className="w-full h-full"
-								controls
-								autoPlay
-								src={`${streamUrl}?t=${Date.now()}`}
-								onError={(e) => console.log("Erreur video", e)}
-							>
-								Votre navigateur ne supporte pas la lecture vidéo.
-							</video>
-						)}
+								<div className="text-center space-y-4 p-8 bg-red-900/20 rounded-xl border border-red-500/50">
+									<WifiOff className="w-16 h-16 text-red-500 mx-auto"/>
+									<h3 className="text-xl font-bold text-red-400">Aucun lien valide</h3>
+									<p className="text-gray-300">Impossible de trouver une source stable.</p>
+								</div>
+							)
+							/* Cas 2 : En attente du Backend */
+							: !isStreamReady ? (
+									<div className="text-center space-y-4">
+										{streamError ? <RefreshCw className="w-16 h-16 text-orange-500 animate-spin mx-auto"/> :
+											<Loader className="w-16 h-16 text-red-600 animate-spin mx-auto"/>}
+										<p className="text-xl font-bold">
+											{streamError ? "Changement de source..." : "Préparation du film..."}
+										</p>
+										<p className="text-gray-400">
+											{streamError || "Connexion aux pairs en cours..."}
+										</p>
+									</div>
+								)
+								/* Cas 3 : LE LECTEUR VIDÉO (Avec gestion d'erreur de lecture) */
+								: (
+									<>
+										{/* On cache la vidéo si une erreur de lecture survient pour afficher le fallback */}
+										<video
+											ref={videoRef}
+											className={`w-full h-full ${streamError === 'PLAYBACK_ERROR' ? 'hidden' : 'block'}`}
+											controls
+											autoPlay
+											src={`${streamUrl}?t=${Date.now()}`}
+											onError={(e) => {
+												console.error("Erreur de lecture vidéo (MediaError):", e.target.error);
+												// On force l'affichage du message "Utilisez VLC"
+												setStreamError('PLAYBACK_ERROR');
+											}}
+										>
+											Votre navigateur ne supporte pas la lecture vidéo.
+										</video>
+
+										{/* Fallback : Si le navigateur n'arrive pas à lire le codec */}
+										{streamError === 'PLAYBACK_ERROR' && (
+											<div
+												className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900 text-center p-8 z-20">
+												<AlertCircle className="w-16 h-16 text-yellow-500 mb-4"/>
+												<h3 className="text-2xl font-bold text-white mb-2">Format non supporté par le navigateur</h3>
+												<p className="text-gray-400 max-w-lg mb-6">
+													Ce film utilise un format vidéo (probablement H.265/HEVC) que Chrome/Firefox ne peuvent pas
+													lire nativement.
+												</p>
+												<a
+													href={`vlc://${streamUrl}`}
+													className="bg-orange-600 hover:bg-orange-500 text-white font-bold py-3 px-8 rounded-full flex items-center gap-3 transition-transform hover:scale-105"
+												>
+													<ExternalLink size={20}/>
+													Ouvrir dans VLC
+												</a>
+												<p className="text-xs text-gray-500 mt-4">Ou copiez le lien pour votre lecteur favori</p>
+											</div>
+										)}
+									</>
+								)}
 					</div>
 
 					<div className="absolute bottom-10 w-full max-w-4xl px-4 z-50">
 						{torrentResults.length > 1 && (
-							<div className="bg-gray-900/80 backdrop-blur rounded-xl p-4 border border-gray-700 max-h-40 overflow-y-auto">
+							<div
+								className="bg-gray-900/80 backdrop-blur rounded-xl p-4 border border-gray-700 max-h-40 overflow-y-auto">
 								<p className="text-xs text-gray-400 mb-2 uppercase font-bold tracking-wider">
 									Sources trouvées ({searchQuality})
 								</p>
@@ -291,7 +334,8 @@ export default function App() {
 									<div key={idx}
 											 onClick={() => forceDownload(t)}
 											 className={`flex justify-between items-center p-2 rounded cursor-pointer hover:bg-white/10 ${t.href === activeTorrent.href ? 'bg-white/5 border-l-4 border-red-500' : 'text-gray-300'}`}>
-                            <span className={`truncate text-sm w-3/4 ${t.href === activeTorrent.href ? 'text-white font-bold' : ''}`}>
+                            <span
+															className={`truncate text-sm w-3/4 ${t.href === activeTorrent.href ? 'text-white font-bold' : ''}`}>
                                 {cleanTitle(t.title)}
                             </span>
 										{t.href === activeTorrent.href && (
@@ -311,23 +355,29 @@ export default function App() {
 			{/* RESTE DE L'INTERFACE (Navbar, Recherche, Grille) */}
 			<nav className="fixed top-0 w-full z-40 bg-gradient-to-b from-black/90 to-transparent p-6">
 				<div className="max-w-7xl mx-auto flex items-center justify-between">
-					<div className="flex items-center gap-2 text-red-600 font-bold text-3xl tracking-tighter cursor-pointer" onClick={() => window.location.reload()}>
-						<Film size={32} />
+					<div className="flex items-center gap-2 text-red-600 font-bold text-3xl tracking-tighter cursor-pointer"
+							 onClick={() => window.location.reload()}>
+						<Film size={32}/>
 						<span>RUSTFLIX</span>
 					</div>
 				</div>
 			</nav>
 
-			<div className="relative w-full h-[50vh] flex flex-col items-center justify-center bg-[url('https://images.unsplash.com/photo-1574267432553-4b4628081c31?ixlib=rb-1.2.1&auto=format&fit=crop&w=1950&q=80')] bg-cover bg-center">
+			<div
+				className="relative w-full h-[50vh] flex flex-col items-center justify-center bg-[url('https://images.unsplash.com/photo-1574267432553-4b4628081c31?ixlib=rb-1.2.1&auto=format&fit=crop&w=1950&q=80')] bg-cover bg-center">
 				<div className="absolute inset-0 bg-black/70 backdrop-blur-sm"></div>
 				<div className="relative z-10 w-full max-w-2xl px-4 text-center">
-					<h1 className="text-4xl md:text-6xl font-extrabold mb-6 text-transparent bg-clip-text bg-gradient-to-r from-red-500 to-orange-500">
+					<h1
+						className="text-4xl md:text-6xl font-extrabold mb-6 text-transparent bg-clip-text bg-gradient-to-r from-red-500 to-orange-500">
 						Le Cinéma, Compilé en Rust.
 					</h1>
 					<form onSubmit={searchMovies} className="relative group">
-						<input type="text" className="w-full bg-black/50 border-2 border-gray-700 rounded-full py-4 pl-12 pr-4 text-xl text-white focus:outline-none focus:border-red-600 transition-all backdrop-blur-md shadow-xl" placeholder="Rechercher..." value={query} onChange={(e) => setQuery(e.target.value)} />
-						<button type="submit" className="absolute right-2 top-1/2 transform -translate-y-1/2 bg-red-600 hover:bg-red-700 text-white p-2 rounded-full transition-all">
-							{loading ? <Loader className="animate-spin" /> : <Search />}
+						<input type="text"
+									 className="w-full bg-black/50 border-2 border-gray-700 rounded-full py-4 pl-12 pr-4 text-xl text-white focus:outline-none focus:border-red-600 transition-all backdrop-blur-md shadow-xl"
+									 placeholder="Rechercher..." value={query} onChange={(e) => setQuery(e.target.value)}/>
+						<button type="submit"
+										className="absolute right-2 top-1/2 transform -translate-y-1/2 bg-red-600 hover:bg-red-700 text-white p-2 rounded-full transition-all">
+							{loading ? <Loader className="animate-spin"/> : <Search/>}
 						</button>
 					</form>
 				</div>
@@ -337,18 +387,24 @@ export default function App() {
 				{error && <div className="text-red-500 mb-4">{error}</div>}
 				<div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
 					{movies.map((movie) => (
-						<div key={movie.id} className="group relative bg-gray-800 rounded-xl overflow-hidden shadow-lg hover:scale-105 transition-transform duration-300">
+						<div key={movie.id}
+								 className="group relative bg-gray-800 rounded-xl overflow-hidden shadow-lg hover:scale-105 transition-transform duration-300">
 							<div className="aspect-[2/3] w-full overflow-hidden bg-gray-900 relative">
 								{movie.poster_path ? (
-									<img src={movie.poster_path} className="w-full h-full object-cover" />
+									<img src={movie.poster_path} className="w-full h-full object-cover"/>
 								) : <div className="w-full h-full flex items-center justify-center bg-gray-800">No Image</div>}
 
-								<div className="absolute inset-0 bg-black/90 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-3 p-4">
-									<button onClick={() => handleStream(movie, 'fr')} disabled={downloading?.id === movie.id} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded-full flex items-center justify-center gap-2">
-										{downloading?.id === movie.id && downloading?.lang === 'fr' ? <Loader className="animate-spin" /> : <Globe size={16}/>} FR
+								<div
+									className="absolute inset-0 bg-black/90 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-3 p-4">
+									<button onClick={() => handleStream(movie, 'fr')} disabled={downloading?.id === movie.id}
+													className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded-full flex items-center justify-center gap-2">
+										{downloading?.id === movie.id && downloading?.lang === 'fr' ? <Loader className="animate-spin"/> :
+											<Globe size={16}/>} FR
 									</button>
-									<button onClick={() => handleStream(movie, 'en')} disabled={downloading?.id === movie.id} className="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-2 px-4 rounded-full flex items-center justify-center gap-2">
-										{downloading?.id === movie.id && downloading?.lang === 'en' ? <Loader className="animate-spin" /> : <Globe size={16}/>} EN
+									<button onClick={() => handleStream(movie, 'en')} disabled={downloading?.id === movie.id}
+													className="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-2 px-4 rounded-full flex items-center justify-center gap-2">
+										{downloading?.id === movie.id && downloading?.lang === 'en' ? <Loader className="animate-spin"/> :
+											<Globe size={16}/>} EN
 									</button>
 								</div>
 							</div>

@@ -1,7 +1,7 @@
 use actix_web::{get, post, web, HttpRequest, HttpResponse, Responder};
 use crate::config::Settings;
 use crate::models::{SearchParams, MagnetParams};
-use crate::services::{tmdb, scraper, docker, stream}; // Ajout de stream
+use crate::services::{tmdb, scraper, docker, stream};
 
 // --- Route TMDB ---
 #[get("/search_tmdb")]
