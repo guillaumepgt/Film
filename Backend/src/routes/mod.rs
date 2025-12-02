@@ -8,6 +8,6 @@ pub fn init_routes(cfg: &mut web::ServiceConfig) {
         .service(handlers::search_fr)
         .service(handlers::search_en)
         .service(handlers::download)
-        .service(handlers::stream_meta)
-        .service(handlers::stream_video_handler);
+        .service(web::resource("/stream/{id}/meta").route(web::get().to(handlers::stream_meta)))
+        .service(web::resource("/stream/{id}/video").route(web::get().to(handlers::stream_video_handler)));
 }
