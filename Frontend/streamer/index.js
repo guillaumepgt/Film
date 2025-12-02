@@ -10,11 +10,11 @@ const magnetLink = process.env.MAGNET;
 const PORT = 9000;
 
 if (!magnetLink) {
-	console.error("❌ Erreur : Pas de lien MAGNET fourni.");
+	console.error("❌ Erreur : Pas de lien MAGNET.");
 	process.exit(1);
 }
 
-console.log(`🚀 Démarrage du moteur pour : ${magnetLink}`);
+console.log(`🚀 Démarrage : ${magnetLink}`);
 
 const engine = torrentStream(magnetLink, {
 	path: '/downloads',
@@ -25,30 +25,64 @@ const engine = torrentStream(magnetLink, {
 
 let videoFile = null;
 let engineStatus = 'searching';
-let progressInterval = null;
-let selectionTime = 0;
-// Liste des clients connectés (navigateurs en train de lire)
+let videoCodecInfo = 'unknown';
+let totalDuration = 0;
 let activeResponses = [];
+let selectionTime = 0;
 
 // --- TIMEOUTS ---
-const SEARCH_TIMEOUT = 20000;
-const STALL_TIMEOUT = 12000;
+const SEARCH_TIMEOUT = 25000;
+const STALL_TIMEOUT = 20000; // Un peu plus tolérant (20s)
 
 const timeoutTimer = setTimeout(() => {
 	if (engineStatus === 'searching') {
-		console.error(`❌ Timeout Recherche : Rien trouvé après ${SEARCH_TIMEOUT/1000}s.`);
+		console.error(`❌ Timeout Recherche.`);
 		engineStatus = 'timeout';
 		engine.destroy();
 	}
 }, SEARCH_TIMEOUT);
 
+// --- FONCTION DE TÉLÉCHARGEMENT SÉQUENTIEL ---
+// C'est ce qui rend le fichier lisible pendant qu'il télécharge !
+const startSequentialDownload = (file) => {
+	const pieceLength = engine.torrent.pieceLength;
+	const startPiece = Math.floor(file.offset / pieceLength);
+	const endPiece = Math.floor((file.offset + file.length) / pieceLength);
+
+	console.log(`⚡ Mode Séquentiel Activé : Pièces ${startPiece} à ${endPiece}`);
+
+	let currentPiece = startPiece;
+
+	// On vérifie toutes les secondes si on doit demander la suite
+	const seqInterval = setInterval(() => {
+		if (!engine || !engine.swarm) {
+			clearInterval(seqInterval);
+			return;
+		}
+
+		// On maintient un "Buffer" de 15 pièces prioritaires en avant
+		// Cela assure que VLC/FFmpeg a toujours de la matière à manger
+		for (let i = 0; i < 15; i++) {
+			if (currentPiece + i <= endPiece) {
+				engine.critical(currentPiece + i);
+			}
+		}
+
+		// Si la pièce actuelle est finie, on avance le curseur
+		// (On vérifie grossièrement si on a le début du buffer)
+		// Note: engine.bitfield n'est pas toujours dispo, on force juste la demande.
+		currentPiece++;
+
+		if (currentPiece > endPiece) clearInterval(seqInterval);
+	}, 1000);
+};
+
 engine.on('ready', () => {
 	clearTimeout(timeoutTimer);
-	console.log('✅ Torrent Engine Ready');
+	console.log('✅ Engine Ready');
 
 	engine.files.forEach((file) => {
 		if (file.name.endsWith('.mp4') || file.name.endsWith('.mkv') || file.name.endsWith('.avi')) {
-			console.log('Fichier candidat:', file.name);
 			if (!videoFile || file.length > videoFile.length) {
 				videoFile = file;
 			}
@@ -56,64 +90,54 @@ engine.on('ready', () => {
 	});
 
 	if (videoFile) {
-		console.log(`🎬 Fichier vidéo sélectionné : ${videoFile.name}`);
-		engineStatus = 'ready';
-		selectionTime = Date.now();
-		videoFile.select();
+		console.log(`🎬 Fichier : ${videoFile.name}`);
 
-		// --- MONITORING ---
-		clearInterval(progressInterval);
-		progressInterval = setInterval(() => {
+		// Lancement du séquentiel
+		startSequentialDownload(videoFile);
+
+		// Analyse FFprobe
+		ffmpeg.ffprobe(videoFile.createReadStream(), (err, metadata) => {
+			if (!err && metadata) {
+				if (metadata.format?.duration) totalDuration = metadata.format.duration;
+				const vStream = metadata.streams?.find(s => s.codec_type === 'video');
+				if (vStream) {
+					videoCodecInfo = vStream.codec_name;
+					if (vStream.pix_fmt?.includes('10le')) videoCodecInfo += ' (10-bit)';
+				}
+			}
+			engineStatus = 'ready';
+			selectionTime = Date.now();
+			videoFile.select();
+		});
+
+		// Monitoring
+		setInterval(() => {
 			const speed = (engine.swarm.downloadSpeed() / 1024).toFixed(0);
 			const downloaded = (engine.swarm.downloaded / 1024 / 1024).toFixed(1);
-			const peers = engine.swarm.wires.length;
 
-			console.log(`⬇️  Vitesse: ${speed} KB/s | Session: ${downloaded} MB | Peers: ${peers}`);
+			console.log(`⬇️  ${speed} KB/s | ${downloaded} MB`);
 
-			// RÈGLE D'ABANDON (STALL)
-			const duration = Date.now() - selectionTime;
-
-			if (engine.swarm.downloaded < 100 * 1024 && duration > STALL_TIMEOUT) {
-				console.error(`❌ STALL DÉTECTÉ : 0 data après ${STALL_TIMEOUT/1000}s. On passe au suivant.`);
+			if (engine.swarm.downloaded < 200 * 1024 && (Date.now() - selectionTime > STALL_TIMEOUT)) {
+				console.error(`❌ STALL.`);
 				engineStatus = 'stalled';
-				clearInterval(progressInterval);
-
-				// NOUVEAU : On coupe toutes les connexions vidéo actives pour forcer l'erreur côté client
-				activeResponses.forEach(res => {
-					try { res.end(); } catch(e) {}
-				});
-				activeResponses = [];
-
 				engine.destroy();
 			}
-
-		}, 1000);
+		}, 2000);
 
 	} else {
-		console.error('❌ Erreur : Pas de fichier vidéo dans ce torrent.');
 		engineStatus = 'no_video';
 		engine.destroy();
 	}
 });
 
 app.get('/', (req, res) => {
-	// Enregistrement du client
 	activeResponses.push(res);
-	res.on('close', () => {
-		activeResponses = activeResponses.filter(r => r !== res);
-	});
+	res.on('close', () => { activeResponses = activeResponses.filter(r => r !== res); });
 
-	if (engineStatus === 'timeout') return res.status(408).send('Erreur : Torrent mort (Metadata).');
-	if (engineStatus === 'stalled') return res.status(408).send('Erreur : Torrent bloqué (0 Seeds).');
-	if (engineStatus === 'no_video') return res.status(404).send('Erreur : Pas de vidéo.');
+	if (engineStatus !== 'ready') return res.status(503).send('Not ready');
 
-	if (!videoFile) return res.status(503).send('Initialisation...');
-
-	console.log("🔥 Connexion client. Mode REMUX (Low CPU)...");
-
-	if (engineStatus === 'stalled') {
-		return res.status(408).send('Flux coupé (Stalled).');
-	}
+	const startTime = parseInt(req.query.start) || 0;
+	console.log(`🔥 Stream start: ${startTime}s`);
 
 	const stream = videoFile.createReadStream();
 
@@ -123,34 +147,41 @@ app.get('/', (req, res) => {
 		'Connection': 'keep-alive'
 	});
 
+	// FFmpeg avec gestion d'erreur améliorée
 	ffmpeg(stream)
+		.seekInput(startTime)
+		.inputOptions(['-probesize 20M', '-analyzeduration 20M'])
 		.videoCodec('copy')
 		.audioCodec('aac')
 		.audioBitrate(128)
 		.audioChannels(2)
 		.outputOptions([
-			'-movflags frag_keyframe+empty_moov',
+			'-movflags frag_keyframe+empty_moov+default_base_moof',
 			'-preset ultrafast',
 			'-tune zerolatency'
 		])
 		.format('mp4')
+		// LOGS D'ERREUR IMPORTANTS
+		.on('stderr', (stderrLine) => {
+			// Affiche les erreurs internes de FFmpeg si ça plante
+			if (stderrLine.includes('Error') || stderrLine.includes('Invalid')) {
+				console.error('FFmpeg Log:', stderrLine);
+			}
+		})
 		.on('error', (err) => {
-			if(!err.message.includes('Output stream')) console.error('FFmpeg Err:', err.message);
+			if(!err.message.includes('Output stream')) console.error('FFmpeg Critical:', err.message);
 		})
 		.pipe(res, { end: true });
 });
 
 app.get('/meta', (req, res) => {
-	let message = "Recherche...";
-	if (engineStatus === 'timeout') message = "Mort (Timeout)";
-	if (engineStatus === 'stalled') message = "Bloqué (0 KB/s)";
-	if (videoFile) message = videoFile.name;
-
 	res.json({
-		ready: !!videoFile && engineStatus !== 'stalled' && engineStatus !== 'timeout',
+		ready: engineStatus === 'ready',
 		status: engineStatus,
-		filename: message
+		filename: videoFile ? videoFile.name : "...",
+		codec: videoCodecInfo,
+		duration: totalDuration
 	});
 });
 
-app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server port ${PORT}`));
