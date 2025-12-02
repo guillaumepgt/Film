@@ -87,7 +87,7 @@ export default function App() {
 						return;
 					}
 					// 2. Cascade de Qualité (Bluray -> 1080p x264 -> 1080p -> 720p)
-					else if (qualityRef.current === 'Bluray') {
+					else if (qualityRef.current === 'Bluray x264') {
 						setStreamError("Bluray HS. Test 1080p x264...");
 						clearInterval(pollingRef.current);
 						setTimeout(() => launchSearch(movieRef.current, langRef.current, '1080p x264'), 1500);
@@ -189,7 +189,7 @@ export default function App() {
 				forceDownload(data[0], true);
 			} else {
 				// Logique de Fallback si rien trouvé à cette étape
-				if (quality === 'Bluray') {
+				if (quality === 'Bluray x264') {
 					launchSearch(movie, lang, '1080p x264');
 				} else if (quality === '1080p x264') {
 					launchSearch(movie, lang, '1080p');
